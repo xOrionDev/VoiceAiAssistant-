@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace 'tj.orion.recorder'
-    compileSdk 35
+    compileSdk 34
 
     defaultConfig {
         applicationId 'tj.orion.recorder'
