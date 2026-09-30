@@ -15,16 +15,14 @@ import android.os.IBinder
 import android.util.Log
 import org.json.JSONObject
 import org.vosk.Recognizer
-import java.io.File
-import java.io.RandomAccessFile
 import java.util.UUID
 import kotlin.concurrent.thread
 
 /**
- * Foreground service: captures mic PCM (16 kHz mono), feeds it to Vosk live,
- * and writes the audio to a WAV file. Transcript is saved to the DB
- * incrementally as final segments arrive, so a crash never loses more than
- * the last few seconds of text.
+ * Foreground service: captures mic PCM (16 kHz mono) and feeds it to Vosk live.
+ * No audio file is written — the transcript is the asset, downstream works on
+ * text, so nothing is kept on disk beyond the text. Transcript is saved to the
+ * DB incrementally, so a crash never loses more than the last few seconds.
  */
 class RecordingService : Service() {
 
@@ -73,15 +71,12 @@ class RecordingService : Service() {
         }
 
         val clientId = UUID.randomUUID().toString()
-        val startedAt = System.currentTimeMillis()
-        val wavFile = File(getExternalFilesDir(null), "$clientId.wav")
         val entryId = db.insert(
             Entry(
                 clientId = clientId,
-                capturedAt = startedAt,
+                capturedAt = System.currentTimeMillis(),
                 type = type,
                 source = Build.MODEL ?: "android",
-                audioLocalRef = wavFile.absolutePath,
                 text = ""
             )
         )
@@ -98,17 +93,11 @@ class RecordingService : Service() {
         val transcript = StringBuilder()
         val buffer = ByteArray(bufSize)
 
-        val wav = RandomAccessFile(wavFile, "rw")
-        writeWavHeaderPlaceholder(wav)
-        var pcmBytes = 0L
-
         try {
             recorder.startRecording()
             while (running) {
                 val n = recorder.read(buffer, 0, buffer.size)
                 if (n <= 0) continue
-                wav.write(buffer, 0, n)
-                pcmBytes += n
                 if (recognizer.acceptWaveForm(buffer, n)) {
                     val text = JSONObject(recognizer.result).optString("text").trim()
                     if (text.isNotEmpty()) {
@@ -127,39 +116,9 @@ class RecordingService : Service() {
             recorder.release()
             recognizer.close()
             vosk.close()
-            finalizeWavHeader(wav, pcmBytes)
-            wav.close()
             db.close()
-            Log.i(TAG, "session $clientId done, ${pcmBytes / 1024} KB pcm")
+            Log.i(TAG, "session $clientId done")
         }
-    }
-
-    // --- WAV (PCM 16-bit mono @ 16 kHz) ---
-
-    private fun writeWavHeaderPlaceholder(wav: RandomAccessFile) {
-        wav.seek(0)
-        wav.write(ByteArray(44)) // filled on finalize
-    }
-
-    private fun finalizeWavHeader(wav: RandomAccessFile, dataLen: Long) {
-        val byteRate = SAMPLE_RATE * 2 // mono, 16-bit
-        val header = ByteArray(44)
-        fun putStr(off: Int, s: String) { for (i in s.indices) header[off + i] = s[i].code.toByte() }
-        fun putInt(off: Int, v: Int) {
-            header[off] = (v and 0xff).toByte()
-            header[off + 1] = ((v shr 8) and 0xff).toByte()
-            header[off + 2] = ((v shr 16) and 0xff).toByte()
-            header[off + 3] = ((v shr 24) and 0xff).toByte()
-        }
-        fun putShort(off: Int, v: Int) {
-            header[off] = (v and 0xff).toByte()
-            header[off + 1] = ((v shr 8) and 0xff).toByte()
-        }
-        putStr(0, "RIFF"); putInt(4, (36 + dataLen).toInt()); putStr(8, "WAVE")
-        putStr(12, "fmt "); putInt(16, 16); putShort(20, 1); putShort(22, 1)
-        putInt(24, SAMPLE_RATE); putInt(28, byteRate); putShort(32, 2); putShort(34, 16)
-        putStr(36, "data"); putInt(40, dataLen.toInt())
-        wav.seek(0); wav.write(header)
     }
 
     private fun startForegroundNotice() {

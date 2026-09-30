@@ -1,8 +1,9 @@
 package tj.orion.recorder
 
 /**
- * Canonical capture entry. Local mirror of the Supabase `entries` contract
- * (minus server-filled fields: summary, action_items, embedding).
+ * Canonical capture entry. Local mirror of the Supabase `entries` contract.
+ * Audio is never stored; server-filled fields (summary, action_items) live
+ * only in Supabase.
  */
 data class Entry(
     val id: Long = 0L,
@@ -13,8 +14,7 @@ data class Entry(
     val text: String? = null,      // transcript or dictated thought
     val lang: String = "ru",
     val tags: List<String> = emptyList(),
-    val audioLocalRef: String? = null, // local file path; audio is never uploaded
-    val syncState: String = "pending"  // pending | synced
+    val syncState: String = "pending"  // pending | synced (synced rows are deleted locally)
 ) {
     companion object {
         const val TYPE_RECORDING = "recording"
@@ -22,6 +22,5 @@ data class Entry(
         const val TYPE_COMMAND = "command"
 
         const val SYNC_PENDING = "pending"
-        const val SYNC_SYNCED = "synced"
     }
 }

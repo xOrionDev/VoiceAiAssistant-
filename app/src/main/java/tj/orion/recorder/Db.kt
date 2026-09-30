@@ -4,12 +4,13 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.io.Closeable
 
 /**
- * Plain-framework local store (no Room / no AndroidX).
- * Holds capture entries; a later SyncClient pushes pending rows to Supabase.
+ * Plain-framework local store (no Room / no AndroidX). Holds capture entries
+ * until SyncClient pushes them to Supabase; synced rows are deleted locally.
  */
-class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, null, VERSION) {
+class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, null, VERSION), Closeable {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -23,7 +24,6 @@ class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, 
                 text          TEXT,
                 lang          TEXT NOT NULL DEFAULT 'ru',
                 tags          TEXT NOT NULL DEFAULT '',
-                audio_ref     TEXT,
                 sync_state    TEXT NOT NULL DEFAULT 'pending'
             )
             """.trimIndent()
@@ -32,9 +32,7 @@ class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, 
         db.execSQL("CREATE INDEX idx_entries_sync ON entries(sync_state)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // v1 only for now
-    }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
 
     fun insert(e: Entry): Long {
         val cv = ContentValues().apply {
@@ -45,24 +43,24 @@ class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, 
             put("text", e.text)
             put("lang", e.lang)
             put("tags", e.tags.joinToString(","))
-            put("audio_ref", e.audioLocalRef)
             put("sync_state", e.syncState)
         }
         return writableDatabase.insert("entries", null, cv)
     }
 
-    /** Set transcript text after STT and mark it back to pending for sync. */
     fun setText(id: Long, text: String) {
-        val cv = ContentValues().apply {
-            put("text", text)
-            put("sync_state", Entry.SYNC_PENDING)
-        }
+        val cv = ContentValues().apply { put("text", text) }
         writableDatabase.update("entries", cv, "id = ?", arrayOf(id.toString()))
     }
 
-    fun markSynced(id: Long) {
-        val cv = ContentValues().apply { put("sync_state", Entry.SYNC_SYNCED) }
-        writableDatabase.update("entries", cv, "id = ?", arrayOf(id.toString()))
+    fun deleteByClientId(clientId: String) {
+        writableDatabase.delete("entries", "client_id = ?", arrayOf(clientId))
+    }
+
+    /** Safety net: drop anything older than N days regardless of sync state. */
+    fun purgeOlderThan(days: Int) {
+        val cutoff = System.currentTimeMillis() - days.toLong() * 24 * 60 * 60 * 1000
+        writableDatabase.delete("entries", "captured_at < ?", arrayOf(cutoff.toString()))
     }
 
     fun recent(limit: Int = 200): List<Entry> =
@@ -74,8 +72,16 @@ class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, 
             arrayOf("%$q%", limit.toString())
         )
 
-    fun pending(): List<Entry> =
-        query("SELECT * FROM entries WHERE sync_state = 'pending' AND text IS NOT NULL", null)
+    /** Entries ready to upload: have transcribed text and not yet synced. */
+    fun pendingForUpload(): List<Entry> =
+        query("SELECT * FROM entries WHERE sync_state = 'pending' AND text IS NOT NULL AND text != ''", null)
+
+    /** Total characters of pending text — used to trigger an early upload. */
+    fun pendingCharCount(): Int {
+        readableDatabase.rawQuery(
+            "SELECT COALESCE(SUM(LENGTH(text)),0) FROM entries WHERE sync_state='pending' AND text IS NOT NULL", null
+        ).use { c -> return if (c.moveToFirst()) c.getInt(0) else 0 }
+    }
 
     private fun query(sql: String, args: Array<String>?): List<Entry> {
         val out = ArrayList<Entry>()
@@ -92,7 +98,6 @@ class Db(context: Context) : SQLiteOpenHelper(context.applicationContext, NAME, 
                         text = c.getString(c.getColumnIndexOrThrow("text")),
                         lang = c.getString(c.getColumnIndexOrThrow("lang")),
                         tags = if (tags.isEmpty()) emptyList() else tags.split(","),
-                        audioLocalRef = c.getString(c.getColumnIndexOrThrow("audio_ref")),
                         syncState = c.getString(c.getColumnIndexOrThrow("sync_state"))
                     )
                 )

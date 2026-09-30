@@ -57,6 +57,11 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (!Auth.isLoggedIn(this)) {
+            startActivity(Intent(this, LoginActivity::class.java))
+            return
+        }
+        SyncScheduler.schedulePeriodic(this)
         refresh()
     }
 
@@ -70,8 +75,8 @@ class MainActivity : Activity() {
     private fun stop() {
         startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
         setRecording(false)
-        // give the service a moment to flush the final transcript
-        list.postDelayed({ refresh() }, 600)
+        // give the service a moment to flush the final transcript, then upload
+        list.postDelayed({ refresh(); SyncScheduler.kickNow(this) }, 800)
     }
 
     private fun setRecording(on: Boolean) {
@@ -111,8 +116,7 @@ class MainActivity : Activity() {
                 Entry.TYPE_COMMAND -> "команда"
                 else -> "запись"
             }
-            val sync = if (e.syncState == Entry.SYNC_SYNCED) "" else " · ⇡"
-            v.findViewById<TextView>(R.id.meta).text = "${fmt.format(Date(e.capturedAt))} · $label$sync"
+            v.findViewById<TextView>(R.id.meta).text = "${fmt.format(Date(e.capturedAt))} · $label"
             v.findViewById<TextView>(R.id.text).text =
                 if (e.text.isNullOrBlank()) "…распознаётся" else e.text
             return v
