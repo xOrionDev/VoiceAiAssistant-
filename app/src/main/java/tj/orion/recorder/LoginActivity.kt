@@ -7,10 +7,9 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
-import android.widget.Toast
 import kotlin.concurrent.thread
 
-/** One-time login. Session persists afterwards, so this shows only until signed in. */
+/** One-time login. Shows a persistent diagnostic log so failures are never hidden. */
 class LoginActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -22,6 +21,9 @@ class LoginActivity : Activity() {
         val status = findViewById<TextView>(R.id.status)
         val btn = findViewById<Button>(R.id.btnLogin)
         val showPass = findViewById<CheckBox>(R.id.showPass)
+
+        // Show whatever happened last (survives recreation / crash)
+        status.text = Diag.read(this)
 
         showPass.setOnCheckedChangeListener { _, checked ->
             password.inputType = if (checked)
@@ -39,19 +41,17 @@ class LoginActivity : Activity() {
                 return@setOnClickListener
             }
             btn.isEnabled = false
-            status.text = "Вход…"
+            Diag.log(this, "tap Войти")
             thread {
                 val err = Auth.login(this, e, p)
                 runOnUiThread {
                     btn.isEnabled = true
+                    status.text = Diag.read(this)
                     if (err == null) {
+                        Diag.log(this, "go to main")
                         SyncScheduler.schedulePeriodic(this)
                         SyncScheduler.kickNow(this)
-                        Toast.makeText(this, "Вход выполнен", Toast.LENGTH_SHORT).show()
                         finish()
-                    } else {
-                        status.text = "Ошибка входа: $err"
-                        Toast.makeText(this, "Ошибка входа: $err", Toast.LENGTH_LONG).show()
                     }
                 }
             }
