@@ -27,6 +27,12 @@
         android:hint="Пароль"
         android:inputType="textPassword" />
 
+    <CheckBox
+        android:id="@+id/showPass"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Показать пароль" />
+
     <Button
         android:id="@+id/btnLogin"
         android:layout_width="match_parent"

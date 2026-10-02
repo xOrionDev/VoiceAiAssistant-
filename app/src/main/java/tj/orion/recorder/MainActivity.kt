@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var btnStop: Button
     private val adapter = EntryAdapter()
     private val fmt = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
+    private var loginShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,9 +59,13 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         if (!Auth.isLoggedIn(this)) {
-            startActivity(Intent(this, LoginActivity::class.java))
+            if (!loginShown) {
+                loginShown = true
+                startActivity(Intent(this, LoginActivity::class.java))
+            }
             return
         }
+        loginShown = false
         SyncScheduler.schedulePeriodic(this)
         refresh()
     }
