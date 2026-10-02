@@ -1,0 +1,20 @@
+name: diag
+
+on: workflow_dispatch
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe Supabase auth + rest
+        env:
+          URL: https://batgckpricdljxzwdqmh.supabase.co
+          KEY: sb_publishable_dYclhqjhxbJ9Mq_ZkjN07A_CKv32vJx
+        run: |
+          AUTH=$(curl -s -o /tmp/a.txt -w "%{http_code}" -X POST "$URL/auth/v1/token?grant_type=password" \
+            -H "apikey: $KEY" -H "Content-Type: application/json" \
+            -d '{"email":"probe@example.com","password":"wrongpass"}')
+          ABODY=$(tr -d '\n\r' < /tmp/a.txt | head -c 180)
+          REST=$(curl -s -o /tmp/r.txt -w "%{http_code}" "$URL/rest/v1/entries?select=id&limit=1" -H "apikey: $KEY")
+          RBODY=$(tr -d '\n\r' < /tmp/r.txt | head -c 180)
+          echo "::error::AUTH=$AUTH ABODY=$ABODY ## REST=$REST RBODY=$RBODY"
