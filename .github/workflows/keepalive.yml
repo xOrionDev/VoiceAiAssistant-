@@ -1,0 +1,25 @@
+name: keepalive
+
+# Pings Supabase every 2 days so the free project never hits the 7-day
+# inactivity pause. Runs on GitHub's runners (reach Supabase directly),
+# independent of the phone.
+on:
+  schedule:
+    - cron: '0 6 */2 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST
+        env:
+          SUPABASE_URL: https://batgckpricdljxzwdqmh.supabase.co
+          SUPABASE_KEY: sb_publishable_dYclhqjhxbJ9Mq_ZkjN07A_CKv32vJx
+        run: |
+          code=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "apikey: ${SUPABASE_KEY}" \
+            "${SUPABASE_URL}/rest/v1/entries?select=id&limit=1")
+          echo "Supabase responded: $code"
+          # keep-alive AND health check: fail if the table/endpoint is unhealthy
+          [ "$code" -ge 200 ] && [ "$code" -lt 400 ]
