@@ -9,8 +9,11 @@ import android.os.Build
 import android.os.Bundle
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import android.view.ViewGroup
+import kotlin.concurrent.thread
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -31,6 +34,8 @@ class MainActivity : Activity() {
     private val adapter = EntryAdapter()
     private val fmt = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
     private var loginShown = false
+
+    companion object { @Volatile private var modelWarmStarted = false }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,10 +87,46 @@ class MainActivity : Activity() {
             }
             loginShown = false
             SyncScheduler.schedulePeriodic(this)
+            prewarmModel()
             refresh()
         } catch (t: Throwable) {
             Diag.log(this, "onResume EXC $t")
         }
+    }
+
+    private fun prewarmModel() {
+        if (modelWarmStarted) return
+        modelWarmStarted = true
+        thread {
+            try {
+                val v = VoskStt(this)
+                if (!v.isModelReady()) Diag.log(this, "prewarm: downloading model…")
+                v.ensureModel()
+                v.close()
+                Diag.log(this, "prewarm: model ready")
+            } catch (t: Throwable) {
+                Diag.log(this, "prewarm EXC $t")
+            }
+        }
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Диагностика")
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == 1) {
+            val log = Diag.read(this)
+            AlertDialog.Builder(this)
+                .setTitle("Диагностика")
+                .setMessage(if (log.isEmpty()) "пусто" else log)
+                .setPositiveButton("OK", null)
+                .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
+                .show()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
     }
 
     private fun start(type: String) {

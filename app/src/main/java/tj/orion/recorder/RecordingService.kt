@@ -58,17 +58,9 @@ class RecordingService : Service() {
     }
 
     private fun captureLoop(type: String) {
+        Diag.log(this, "rec start type=$type")
         val db = Db(this)
         val vosk = VoskStt(this)
-        try {
-            vosk.ensureModel { Log.i(TAG, it) }
-        } catch (e: Exception) {
-            Log.e(TAG, "model load failed", e)
-            running = false
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return
-        }
 
         val clientId = UUID.randomUUID().toString()
         val entryId = db.insert(
@@ -81,6 +73,25 @@ class RecordingService : Service() {
             )
         )
 
+        try {
+            if (!vosk.isModelReady()) Diag.log(this, "model not ready, downloading ~45MB…")
+            vosk.ensureModel { Log.i(TAG, it) }
+            Diag.log(this, "model ready")
+        } catch (e: Throwable) {
+            Diag.log(this, "model FAIL $e")
+            running = false
+            db.close(); vosk.close()
+            stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+            return
+        }
+
+        if (!running) {
+            Diag.log(this, "stopped before model finished — tap Запись снова")
+            db.close(); vosk.close()
+            stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+            return
+        }
+
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
@@ -89,12 +100,19 @@ class RecordingService : Service() {
             MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufSize
         )
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            Diag.log(this, "AudioRecord NOT initialized — нет доступа к микрофону?")
+            recorder.release(); db.close(); vosk.close()
+            stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
+            return
+        }
         val recognizer: Recognizer = vosk.newRecognizer()
         val transcript = StringBuilder()
         val buffer = ByteArray(bufSize)
 
         try {
             recorder.startRecording()
+            Diag.log(this, "recording started")
             while (running) {
                 val n = recorder.read(buffer, 0, buffer.size)
                 if (n <= 0) continue
@@ -109,15 +127,15 @@ class RecordingService : Service() {
             val tail = JSONObject(recognizer.finalResult).optString("text").trim()
             if (tail.isNotEmpty()) transcript.append(tail)
             db.setText(entryId, transcript.toString().trim())
-        } catch (e: Exception) {
-            Log.e(TAG, "capture error", e)
+            Diag.log(this, "rec done, chars=${transcript.length}")
+        } catch (e: Throwable) {
+            Diag.log(this, "capture EXC $e")
         } finally {
             try { recorder.stop() } catch (_: Exception) {}
             recorder.release()
             recognizer.close()
             vosk.close()
             db.close()
-            Log.i(TAG, "session $clientId done")
         }
     }
 
