@@ -1,9 +1,13 @@
 package tj.orion.recorder
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,6 +17,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.widget.CheckBox
 import android.widget.TextView
+import android.widget.Toast
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
@@ -65,6 +70,7 @@ class MainActivity : Activity() {
                 return
             }
             loginShown = false
+            ensurePermissions()
             prewarmModel()
             requestBatteryExemption()
             SyncScheduler.schedulePeriodic(this) // backstop retry for anything left pending
@@ -82,9 +88,20 @@ class MainActivity : Activity() {
     }
 
     private fun startRecording() {
+        if (!hasMic()) {
+            ensurePermissions()
+            toast("Нужен доступ к микрофону")
+            return
+        }
         val type = if (remember.isChecked) Entry.TYPE_THOUGHT else Entry.TYPE_RECORDING
         val i = Intent(this, RecordingService::class.java).putExtra(RecordingService.EXTRA_TYPE, type)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i) else startService(i)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i) else startService(i)
+        } catch (t: Throwable) {
+            Diag.log(this, "startService EXC $t")
+            toast("Не удалось начать запись")
+            return
+        }
 
         state = S.REC
         orb.state = OrbView.State.RECORDING
@@ -175,12 +192,35 @@ class MainActivity : Activity() {
             .setTitle("Диагностика")
             .setMessage(if (log.isEmpty()) "пусто" else log)
             .setPositiveButton("OK", null)
+            .setNeutralButton("Копировать") { _, _ -> copyLog(log) }
             .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
             .show()
     }
 
     private fun showDiagIfCrash() {
         val log = Diag.read(this)
-        if (log.contains("CRASH")) showDiag()
+        if (log.contains("CRASH")) { copyLog(log); showDiag() } // auto-copy so it can be pasted
     }
+
+    private fun copyLog(log: String) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("diag", log))
+            toast("Скопировано")
+        } catch (_: Throwable) {}
+    }
+
+    private fun hasMic() =
+        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+    private fun ensurePermissions() {
+        val need = ArrayList<String>()
+        if (!hasMic()) need.add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) need.add(Manifest.permission.POST_NOTIFICATIONS)
+        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1)
+    }
+
+    private fun toast(m: String) = Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
 }
