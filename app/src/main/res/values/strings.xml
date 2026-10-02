@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Recorder</string>
-    <string name="rec_channel">Recording</string>
+    <string name="app_name">Voice Ai Assistant</string>
+    <string name="rec_channel">Запись</string>
 </resources>

@@ -12,6 +12,7 @@ import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import org.json.JSONObject
 import org.vosk.Recognizer
@@ -59,6 +60,9 @@ class RecordingService : Service() {
 
     private fun captureLoop(type: String) {
         Diag.log(this, "rec start type=$type")
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val wl = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "recorder:capture")
+        wl.acquire(12 * 60 * 60 * 1000L) // keep CPU awake while recording (screen off)
         val db = Db(this)
         val vosk = VoskStt(this)
 
@@ -81,6 +85,7 @@ class RecordingService : Service() {
             Diag.log(this, "model FAIL $e")
             running = false
             db.close(); vosk.close()
+            if (wl.isHeld) wl.release()
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
             return
         }
@@ -88,6 +93,7 @@ class RecordingService : Service() {
         if (!running) {
             Diag.log(this, "stopped before model finished — tap Запись снова")
             db.close(); vosk.close()
+            if (wl.isHeld) wl.release()
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
             return
         }
@@ -103,6 +109,7 @@ class RecordingService : Service() {
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             Diag.log(this, "AudioRecord NOT initialized — нет доступа к микрофону?")
             recorder.release(); db.close(); vosk.close()
+            if (wl.isHeld) wl.release()
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
             return
         }
@@ -136,6 +143,7 @@ class RecordingService : Service() {
             recognizer.close()
             vosk.close()
             db.close()
+            if (wl.isHeld) wl.release()
         }
     }
 

@@ -1,98 +1,147 @@
 package tj.orion.recorder
 
-import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
-import android.view.Menu
-import android.view.MenuItem
-import android.view.View
-import android.view.ViewGroup
-import kotlin.concurrent.thread
-import android.widget.BaseAdapter
-import android.widget.Button
-import android.widget.EditText
-import android.widget.ListView
+import android.os.Handler
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
+import android.widget.CheckBox
 import android.widget.TextView
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
-    private lateinit var db: Db
-    private lateinit var list: ListView
-    private lateinit var search: EditText
-    private lateinit var btnRecord: Button
-    private lateinit var btnThought: Button
-    private lateinit var btnStop: Button
-    private val adapter = EntryAdapter()
-    private val fmt = SimpleDateFormat("dd.MM HH:mm", Locale.getDefault())
-    private var loginShown = false
+    private enum class S { IDLE, REC, BUSY }
+    private var state = S.IDLE
 
-    companion object { @Volatile private var modelWarmStarted = false }
+    private lateinit var orb: OrbView
+    private lateinit var status: TextView
+    private lateinit var timer: TextView
+    private lateinit var dot: TextView
+    private lateinit var remember: CheckBox
+
+    private val ui = Handler(Looper.getMainLooper())
+    private var seconds = 0
+    private val tick = object : Runnable {
+        override fun run() {
+            seconds++
+            timer.text = fmt(seconds)
+            ui.postDelayed(this, 1000)
+        }
+    }
+
+    private var loginShown = false
+    companion object {
+        @Volatile private var modelWarmStarted = false
+        @Volatile private var batteryAsked = false
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        db = Db(this)
+        orb = findViewById(R.id.orb)
+        status = findViewById(R.id.status)
+        timer = findViewById(R.id.timer)
+        dot = findViewById(R.id.dot)
+        remember = findViewById(R.id.remember)
 
-        list = findViewById(R.id.list)
-        search = findViewById(R.id.search)
-        btnRecord = findViewById(R.id.btnRecord)
-        btnThought = findViewById(R.id.btnThought)
-        btnStop = findViewById(R.id.btnStop)
-        list.adapter = adapter
+        orb.setOnClickListener { onOrbTap() }
+        orb.setOnLongClickListener { showDiag(); true }
 
-        btnRecord.setOnClickListener { start(Entry.TYPE_RECORDING) }
-        btnThought.setOnClickListener { start(Entry.TYPE_THOUGHT) }
-        btnStop.setOnClickListener { stop() }
-
-        search.addTextChangedListener(object : TextWatcher {
-            override fun afterTextChanged(s: Editable?) = refresh()
-            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-        })
-
-        ensurePermissions()
         showDiagIfCrash()
-    }
-
-    private fun showDiagIfCrash() {
-        val log = Diag.read(this)
-        if (log.contains("CRASH") || log.contains("EXC")) {
-            AlertDialog.Builder(this)
-                .setTitle("Диагностика")
-                .setMessage(log)
-                .setPositiveButton("OK", null)
-                .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
-                .show()
-        }
     }
 
     override fun onResume() {
         super.onResume()
         try {
             if (!Auth.isLoggedIn(this)) {
-                if (!loginShown) {
-                    loginShown = true
-                    startActivity(Intent(this, LoginActivity::class.java))
-                }
+                if (!loginShown) { loginShown = true; startActivity(Intent(this, LoginActivity::class.java)) }
                 return
             }
             loginShown = false
-            SyncScheduler.schedulePeriodic(this)
             prewarmModel()
-            refresh()
-        } catch (t: Throwable) {
-            Diag.log(this, "onResume EXC $t")
+            requestBatteryExemption()
+            SyncScheduler.schedulePeriodic(this) // backstop retry for anything left pending
+        } catch (t: Throwable) { Diag.log(this, "onResume EXC $t") }
+    }
+
+    // --- orb state machine ---
+
+    private fun onOrbTap() {
+        when (state) {
+            S.IDLE -> startRecording()
+            S.REC -> stopAndProcess()
+            S.BUSY -> {}
         }
     }
+
+    private fun startRecording() {
+        val type = if (remember.isChecked) Entry.TYPE_THOUGHT else Entry.TYPE_RECORDING
+        val i = Intent(this, RecordingService::class.java).putExtra(RecordingService.EXTRA_TYPE, type)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i) else startService(i)
+
+        state = S.REC
+        orb.state = OrbView.State.RECORDING
+        setStatus("Идёт запись")
+        dot.visibility = TextView.VISIBLE
+        remember.visibility = CheckBox.INVISIBLE
+        seconds = 0; timer.text = "00:00"
+        ui.postDelayed(tick, 1000)
+    }
+
+    private fun stopAndProcess() {
+        startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
+        ui.removeCallbacks(tick)
+        timer.text = ""
+        dot.visibility = TextView.GONE
+        state = S.BUSY
+        orb.state = OrbView.State.BUSY
+        val thought = remember.isChecked
+
+        thread {
+            // 1) processing (transcript finalizes live; give it a readable beat)
+            setStatusUi("Обрабатываю ваши мысли")
+            sleep(2000)
+            // 2) creating task = upload to Supabase, min 2s shown
+            setStatusUi(if (thought) "Сохраняю мысль" else "Создаю задачу")
+            val t0 = System.currentTimeMillis()
+            val ok = try { SyncClient.syncNow(this) } catch (t: Throwable) { Diag.log(this, "sync EXC $t"); false }
+            val left = 2000 - (System.currentTimeMillis() - t0)
+            if (left > 0) sleep(left)
+            // 3) result
+            setStatusUi(if (ok) "Задача создана" else "Сохранено, отправлю позже")
+            sleep(2000)
+            ui.post { toIdle() }
+        }
+    }
+
+    private fun toIdle() {
+        state = S.IDLE
+        orb.state = OrbView.State.IDLE
+        setStatus("Нажмите, чтобы записать")
+        remember.visibility = CheckBox.VISIBLE
+        remember.isChecked = false
+    }
+
+    // --- helpers ---
+
+    private fun setStatus(text: String) {
+        status.text = text
+        status.alpha = 0f
+        status.animate().alpha(1f).setDuration(280).start()
+    }
+
+    private fun setStatusUi(text: String) = ui.post { setStatus(text) }
+
+    private fun fmt(s: Int) = "%02d:%02d".format(s / 60, s % 60)
+
+    private fun sleep(ms: Long) { try { Thread.sleep(ms) } catch (_: InterruptedException) {} }
 
     private fun prewarmModel() {
         if (modelWarmStarted) return
@@ -101,100 +150,37 @@ class MainActivity : Activity() {
             try {
                 val v = VoskStt(this)
                 if (!v.isModelReady()) Diag.log(this, "prewarm: downloading model…")
-                v.ensureModel()
-                v.close()
+                v.ensureModel(); v.close()
                 Diag.log(this, "prewarm: model ready")
-            } catch (t: Throwable) {
-                Diag.log(this, "prewarm EXC $t")
+            } catch (t: Throwable) { Diag.log(this, "prewarm EXC $t") }
+        }
+    }
+
+    private fun requestBatteryExemption() {
+        if (batteryAsked) return
+        batteryAsked = true
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                startActivity(
+                    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName"))
+                )
             }
-        }
+        } catch (_: Exception) {}
     }
 
-    private fun syncNowAsync() {
-        thread {
-            try { SyncClient.syncNow(this) } catch (t: Throwable) { Diag.log(this, "sync EXC $t") }
-            runOnUiThread { refresh() }
-        }
+    private fun showDiag() {
+        val log = Diag.read(this)
+        AlertDialog.Builder(this)
+            .setTitle("Диагностика")
+            .setMessage(if (log.isEmpty()) "пусто" else log)
+            .setPositiveButton("OK", null)
+            .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
+            .show()
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, 2, 0, "Синхронизировать")
-        menu.add(0, 1, 1, "Диагностика")
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        when (item.itemId) {
-            2 -> { syncNowAsync(); return true }
-            1 -> {
-                val log = Diag.read(this)
-                AlertDialog.Builder(this)
-                    .setTitle("Диагностика")
-                    .setMessage(if (log.isEmpty()) "пусто" else log)
-                    .setPositiveButton("OK", null)
-                    .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
-                    .show()
-                return true
-            }
-        }
-        return super.onOptionsItemSelected(item)
-    }
-
-    private fun start(type: String) {
-        if (!hasMic()) { ensurePermissions(); return }
-        val i = Intent(this, RecordingService::class.java).putExtra(RecordingService.EXTRA_TYPE, type)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(i) else startService(i)
-        setRecording(true)
-    }
-
-    private fun stop() {
-        startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
-        setRecording(false)
-        // give the service a moment to flush the final transcript, then upload directly
-        list.postDelayed({ refresh(); syncNowAsync() }, 1200)
-    }
-
-    private fun setRecording(on: Boolean) {
-        btnRecord.isEnabled = !on
-        btnThought.isEnabled = !on
-        btnStop.isEnabled = on
-    }
-
-    private fun refresh() {
-        val q = search.text.toString().trim()
-        adapter.setItems(if (q.isEmpty()) db.recent() else db.search(q))
-    }
-
-    private fun hasMic() =
-        checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-    private fun ensurePermissions() {
-        val need = ArrayList<String>()
-        if (!hasMic()) need.add(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) need.add(Manifest.permission.POST_NOTIFICATIONS)
-        if (need.isNotEmpty()) requestPermissions(need.toTypedArray(), 1)
-    }
-
-    private inner class EntryAdapter : BaseAdapter() {
-        private var items: List<Entry> = emptyList()
-        fun setItems(v: List<Entry>) { items = v; notifyDataSetChanged() }
-        override fun getCount() = items.size
-        override fun getItem(position: Int) = items[position]
-        override fun getItemId(position: Int) = items[position].id
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val v = convertView ?: layoutInflater.inflate(R.layout.item_entry, parent, false)
-            val e = items[position]
-            val label = when (e.type) {
-                Entry.TYPE_THOUGHT -> "мысль"
-                Entry.TYPE_COMMAND -> "команда"
-                else -> "запись"
-            }
-            v.findViewById<TextView>(R.id.meta).text = "${fmt.format(Date(e.capturedAt))} · $label"
-            v.findViewById<TextView>(R.id.text).text =
-                if (e.text.isNullOrBlank()) "…распознаётся" else e.text
-            return v
-        }
+    private fun showDiagIfCrash() {
+        val log = Diag.read(this)
+        if (log.contains("CRASH")) showDiag()
     }
 }

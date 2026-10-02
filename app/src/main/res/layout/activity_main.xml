@@ -3,47 +3,56 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:gravity="center"
+    android:background="#000000"
+    android:padding="24dp">
+
+    <tj.orion.recorder.OrbView
+        android:id="@+id/orb"
+        android:layout_width="280dp"
+        android:layout_height="280dp" />
 
     <LinearLayout
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginTop="26dp">
 
-        <Button
-            android:id="@+id/btnRecord"
-            android:layout_width="0dp"
+        <TextView
+            android:id="@+id/dot"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Запись" />
+            android:text="●"
+            android:textColor="#ff5d5d"
+            android:textSize="14sp"
+            android:layout_marginEnd="8dp"
+            android:visibility="gone" />
 
-        <Button
-            android:id="@+id/btnThought"
-            android:layout_width="0dp"
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="Мысль" />
+            android:text="Нажмите, чтобы записать"
+            android:textColor="#eef0f6"
+            android:textSize="17sp" />
 
-        <Button
-            android:id="@+id/btnStop"
-            android:layout_width="0dp"
+        <TextView
+            android:id="@+id/timer"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:enabled="false"
-            android:text="Стоп" />
+            android:textColor="#9aa0b2"
+            android:textSize="17sp"
+            android:layout_marginStart="8dp"
+            android:fontFamily="monospace" />
     </LinearLayout>
 
-    <EditText
-        android:id="@+id/search"
-        android:layout_width="match_parent"
+    <CheckBox
+        android:id="@+id/remember"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:hint="Поиск по тексту"
-        android:inputType="text"
-        android:layout_marginTop="8dp" />
-
-    <ListView
-        android:id="@+id/list"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_marginTop="8dp" />
+        android:text="Запомнить"
+        android:textColor="#cfd3df"
+        android:layout_marginTop="22dp"
+        android:buttonTint="#a24dff" />
 </LinearLayout>
