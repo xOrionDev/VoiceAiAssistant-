@@ -14,29 +14,41 @@ object SyncScheduler {
     private const val JOB_NOW = 101
 
     fun schedulePeriodic(ctx: Context) {
-        val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-        val job = JobInfo.Builder(JOB_PERIODIC, ComponentName(ctx, SyncJobService::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPeriodic(Config.SYNC_PERIOD_MS)
-            .setPersisted(true)
-            .build()
-        js.schedule(job)
+        try {
+            val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+            val job = JobInfo.Builder(JOB_PERIODIC, ComponentName(ctx, SyncJobService::class.java))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setPeriodic(Config.SYNC_PERIOD_MS)
+                .setPersisted(true)
+                .build()
+            js.schedule(job)
+        } catch (t: Throwable) {
+            Diag.log(ctx, "schedulePeriodic EXC $t")
+        }
     }
 
     /** Fire a one-off upload now (e.g. after a recording, or when the buffer is big). */
     fun kickNow(ctx: Context) {
-        val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
-        val job = JobInfo.Builder(JOB_NOW, ComponentName(ctx, SyncJobService::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setOverrideDeadline(0)
-            .build()
-        js.schedule(job)
+        try {
+            val js = ctx.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+            val job = JobInfo.Builder(JOB_NOW, ComponentName(ctx, SyncJobService::class.java))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setOverrideDeadline(0)
+                .build()
+            js.schedule(job)
+        } catch (t: Throwable) {
+            Diag.log(ctx, "kickNow EXC $t")
+        }
     }
 
     /** Kick immediately only if enough text has piled up. */
     fun kickIfThreshold(ctx: Context) {
-        val chars = Db(ctx).use { it.pendingCharCount() }
-        if (chars >= Config.SYNC_CHAR_THRESHOLD) kickNow(ctx)
+        try {
+            val chars = Db(ctx).use { it.pendingCharCount() }
+            if (chars >= Config.SYNC_CHAR_THRESHOLD) kickNow(ctx)
+        } catch (t: Throwable) {
+            Diag.log(ctx, "kickIfThreshold EXC $t")
+        }
     }
 }
 

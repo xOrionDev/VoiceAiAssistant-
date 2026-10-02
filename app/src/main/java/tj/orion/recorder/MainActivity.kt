@@ -2,6 +2,7 @@ package tj.orion.recorder
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -54,20 +55,37 @@ class MainActivity : Activity() {
         })
 
         ensurePermissions()
+        showDiagIfCrash()
+    }
+
+    private fun showDiagIfCrash() {
+        val log = Diag.read(this)
+        if (log.contains("CRASH") || log.contains("EXC")) {
+            AlertDialog.Builder(this)
+                .setTitle("Диагностика")
+                .setMessage(log)
+                .setPositiveButton("OK", null)
+                .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
+                .show()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        if (!Auth.isLoggedIn(this)) {
-            if (!loginShown) {
-                loginShown = true
-                startActivity(Intent(this, LoginActivity::class.java))
+        try {
+            if (!Auth.isLoggedIn(this)) {
+                if (!loginShown) {
+                    loginShown = true
+                    startActivity(Intent(this, LoginActivity::class.java))
+                }
+                return
             }
-            return
+            loginShown = false
+            SyncScheduler.schedulePeriodic(this)
+            refresh()
+        } catch (t: Throwable) {
+            Diag.log(this, "onResume EXC $t")
         }
-        loginShown = false
-        SyncScheduler.schedulePeriodic(this)
-        refresh()
     }
 
     private fun start(type: String) {
