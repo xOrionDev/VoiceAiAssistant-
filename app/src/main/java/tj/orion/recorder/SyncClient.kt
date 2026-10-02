@@ -1,10 +1,7 @@
 package tj.orion.recorder
 
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
-import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -26,7 +23,6 @@ object SyncClient {
         val token = Auth.accessToken(ctx)
         if (token == null) {
             Diag.log(ctx, "sync: no token")
-            toast(ctx, "Синхронизация: нужен вход в аккаунт")
             return false
         }
 
@@ -46,20 +42,17 @@ object SyncClient {
         val (code, body) = post("/rest/v1/entries?on_conflict=user_id,client_id", arr.toString(), token)
         if (code !in 200..299) {
             Diag.log(ctx, "sync: FAIL HTTP $code ${body.take(140)}")
-            toast(ctx, "Заливка не удалась: HTTP $code")
             return false
         }
 
         val confirmed = parseClientIds(body)
         if (confirmed.isEmpty()) {
             Diag.log(ctx, "sync: 2xx but 0 rows returned — оставляю локально")
-            toast(ctx, "Сервер не подтвердил запись")
             return false
         }
 
         Db(ctx).use { db -> confirmed.forEach { db.deleteByClientId(it) } }
         Diag.log(ctx, "sync: OK, uploaded ${confirmed.size}")
-        toast(ctx, "Синхронизировано: ${confirmed.size}")
         Log.i(TAG, "synced ${confirmed.size}")
         return true
     }
@@ -92,12 +85,6 @@ object SyncClient {
         } catch (e: Exception) {
             Log.e(TAG, "upload failed", e)
             -1 to (e.message ?: "network error")
-        }
-    }
-
-    private fun toast(ctx: Context, msg: String) {
-        Handler(Looper.getMainLooper()).post {
-            Toast.makeText(ctx.applicationContext, msg, Toast.LENGTH_LONG).show()
         }
     }
 
