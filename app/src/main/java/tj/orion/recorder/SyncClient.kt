@@ -20,10 +20,12 @@ object SyncClient {
     /** Blocking. Returns true if nothing is left pending. */
     fun syncNow(ctx: Context): Boolean {
         val pending = Db(ctx).use { it.pendingForUpload() }
+        Diag.log(ctx, "sync: ${pending.size} pending")
         if (pending.isEmpty()) return true
 
         val token = Auth.accessToken(ctx)
         if (token == null) {
+            Diag.log(ctx, "sync: no token")
             toast(ctx, "Синхронизация: нужен вход в аккаунт")
             return false
         }
@@ -43,11 +45,13 @@ object SyncClient {
 
         val err = post("/rest/v1/entries?on_conflict=user_id,client_id", arr.toString(), token)
         if (err != null) {
+            Diag.log(ctx, "sync: FAIL $err")
             toast(ctx, "Заливка не удалась: $err")
             return false
         }
 
         Db(ctx).use { db -> pending.forEach { db.deleteByClientId(it.clientId) } }
+        Diag.log(ctx, "sync: OK, uploaded ${pending.size}")
         toast(ctx, "Синхронизировано: ${pending.size}")
         Log.i(TAG, "synced ${pending.size} entries")
         return true

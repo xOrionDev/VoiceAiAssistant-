@@ -110,21 +110,32 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun syncNowAsync() {
+        thread {
+            try { SyncClient.syncNow(this) } catch (t: Throwable) { Diag.log(this, "sync EXC $t") }
+            runOnUiThread { refresh() }
+        }
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, 1, 0, "Диагностика")
+        menu.add(0, 2, 0, "Синхронизировать")
+        menu.add(0, 1, 1, "Диагностика")
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if (item.itemId == 1) {
-            val log = Diag.read(this)
-            AlertDialog.Builder(this)
-                .setTitle("Диагностика")
-                .setMessage(if (log.isEmpty()) "пусто" else log)
-                .setPositiveButton("OK", null)
-                .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
-                .show()
-            return true
+        when (item.itemId) {
+            2 -> { syncNowAsync(); return true }
+            1 -> {
+                val log = Diag.read(this)
+                AlertDialog.Builder(this)
+                    .setTitle("Диагностика")
+                    .setMessage(if (log.isEmpty()) "пусто" else log)
+                    .setPositiveButton("OK", null)
+                    .setNegativeButton("Очистить") { _, _ -> Diag.clear(this) }
+                    .show()
+                return true
+            }
         }
         return super.onOptionsItemSelected(item)
     }
@@ -139,8 +150,8 @@ class MainActivity : Activity() {
     private fun stop() {
         startService(Intent(this, RecordingService::class.java).setAction(RecordingService.ACTION_STOP))
         setRecording(false)
-        // give the service a moment to flush the final transcript, then upload
-        list.postDelayed({ refresh(); SyncScheduler.kickNow(this) }, 800)
+        // give the service a moment to flush the final transcript, then upload directly
+        list.postDelayed({ refresh(); syncNowAsync() }, 1200)
     }
 
     private fun setRecording(on: Boolean) {
