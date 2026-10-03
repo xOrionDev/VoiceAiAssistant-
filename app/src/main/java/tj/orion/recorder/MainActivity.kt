@@ -44,7 +44,6 @@ class MainActivity : Activity() {
     private var loginShown = false
     companion object {
         @Volatile private var modelWarmStarted = false
-        @Volatile private var batteryAsked = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -174,8 +173,9 @@ class MainActivity : Activity() {
     }
 
     private fun requestBatteryExemption() {
-        if (batteryAsked) return
-        batteryAsked = true
+        val p = getSharedPreferences("app", Context.MODE_PRIVATE)
+        if (p.getBoolean("battery_asked", false)) return // ask once, ever
+        p.edit().putBoolean("battery_asked", true).apply()
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
             if (!pm.isIgnoringBatteryOptimizations(packageName)) {
