@@ -11,13 +11,26 @@ android {
         applicationId 'tj.orion.recorder'
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName '0.1'
+        versionCode (project.hasProperty('vCode') ? project.vCode.toInteger() : 1)
+        versionName (project.hasProperty('vName') ? project.vName : '1.0')
+    }
+
+    signingConfigs {
+        app {
+            storeFile file('keystore.jks')
+            storePassword 'voiceai123'
+            keyAlias 'voiceai'
+            keyPassword 'voiceai123'
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig signingConfigs.app
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.app
         }
     }
 

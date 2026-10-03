@@ -27,7 +27,7 @@ jobs:
           gradle-version: '8.10.2'
 
       - name: assembleDebug
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug -PvCode=${{ github.run_number }} -PvName=1.0.${{ github.run_number }} --no-daemon --stacktrace
 
       - name: Rename APK
         run: |
