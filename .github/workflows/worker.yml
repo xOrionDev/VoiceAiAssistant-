@@ -1,0 +1,31 @@
+name: ai-worker
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every ~10 minutes (GitHub may delay a few min)
+  workflow_dispatch:           # manual "Run workflow" button
+
+# Avoid overlapping runs (a slow run won't collide with the next cron tick).
+concurrency:
+  group: ai-worker
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install -r worker/requirements.txt
+
+      - name: Process entries + send reminders
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN:   ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY:       ${{ secrets.GEMINI_API_KEY }}
+        run: python worker/process.py
