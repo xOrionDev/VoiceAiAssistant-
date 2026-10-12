@@ -84,6 +84,7 @@ class RecordingService : Service() {
         } catch (e: Throwable) {
             Diag.log(this, "model FAIL $e")
             running = false
+            db.deleteByClientId(clientId) // don't leave an empty row behind
             db.close(); vosk.close()
             if (wl.isHeld) wl.release()
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
@@ -92,6 +93,7 @@ class RecordingService : Service() {
 
         if (!running) {
             Diag.log(this, "stopped before model finished — tap Запись снова")
+            db.deleteByClientId(clientId)
             db.close(); vosk.close()
             if (wl.isHeld) wl.release()
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
@@ -108,6 +110,7 @@ class RecordingService : Service() {
         )
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             Diag.log(this, "AudioRecord NOT initialized — нет доступа к микрофону?")
+            db.deleteByClientId(clientId)
             recorder.release(); db.close(); vosk.close()
             if (wl.isHeld) wl.release()
             stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
@@ -133,8 +136,14 @@ class RecordingService : Service() {
             }
             val tail = JSONObject(recognizer.finalResult).optString("text").trim()
             if (tail.isNotEmpty()) transcript.append(tail)
-            db.setText(entryId, transcript.toString().trim())
-            Diag.log(this, "rec done, chars=${transcript.length}")
+            val finalText = transcript.toString().trim()
+            if (finalText.isEmpty()) {
+                db.deleteByClientId(clientId) // nothing recognised — drop the empty row
+                Diag.log(this, "rec done but empty — ничего не распознано")
+            } else {
+                db.setText(entryId, finalText)
+                Diag.log(this, "rec done, chars=${finalText.length}")
+            }
         } catch (e: Throwable) {
             Diag.log(this, "capture EXC $e")
         } finally {
