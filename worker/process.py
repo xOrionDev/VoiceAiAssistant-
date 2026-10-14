@@ -16,12 +16,17 @@
 
 import os
 import re
+import html
 import json
 import datetime as dt
 from zoneinfo import ZoneInfo
 from urllib.parse import quote
 
 import requests
+
+def esc(s):
+    """Escape user/LLM text for Telegram HTML parse_mode."""
+    return html.escape(str(s or ""))
 
 # --- config -----------------------------------------------------------------
 
@@ -120,7 +125,14 @@ def tg_send(chat_id, text, task_id=None):
              reply_markup=kb, disable_web_page_preview=True)
     if res.get("ok"):
         return res["result"]["message_id"]
-    log("tg send failed:", res)
+    diag(f"tg_send HTML fail: {res.get('description') or res}")
+    # Self-heal: resend as plain text (entity parse errors can't happen then).
+    plain = re.sub(r"<[^>]+>", "", text)
+    res = tg("sendMessage", chat_id=chat_id, text=plain,
+             reply_markup=kb, disable_web_page_preview=True)
+    if res.get("ok"):
+        return res["result"]["message_id"]
+    diag(f"tg_send plain fail: {res.get('description') or res}")
     return None
 
 # --- 1) Poll Telegram: chat_id + callbacks ----------------------------------
@@ -399,7 +411,7 @@ def notify_created(chat_id, made):
     for title, kind, nxt in made:
         label = KIND_LABEL.get(kind, "•")
         when = f" · напомню {nxt.astimezone(TZ).strftime('%d.%m %H:%M')}" if nxt else ""
-        lines.append(f"{label}: {title}{when}")
+        lines.append(f"{label}: {esc(title)}{when}")
     tg_send(chat_id, "\n".join(lines))
 
 # --- 3) Send due reminders --------------------------------------------------
@@ -419,11 +431,11 @@ def send_due_reminders(chat_id):
     diag(f"reminders due: {len(due)} (chat_id set)")
     for task in due:
         head = KIND_LABEL.get(task["kind"], "🔔 Напоминание")
-        lines = [f"{head}", f"<b>{task['title']}</b>"]
+        lines = [f"{head}", f"<b>{esc(task['title'])}</b>"]
         if task.get("details"):
-            lines.append(task["details"])
+            lines.append(esc(task["details"]))
         if task.get("recipient"):
-            lines.append(f"→ {task['recipient']}")
+            lines.append(f"→ {esc(task['recipient'])}")
         if task.get("deadline"):
             d = dt.datetime.fromisoformat(task["deadline"]).astimezone(TZ)
             lines.append(f"Срок: {d.strftime('%d.%m.%Y')}")
