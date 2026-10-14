@@ -41,6 +41,13 @@ TZ = ZoneInfo("Asia/Dushanbe")           # UTC+5, no DST
 REMIND_HOUR = 9                          # reminders fire at 09:00 local
 MAX_ENTRIES_PER_RUN = 20
 
+# Self-diagnostics: persisted to app_settings['worker_diag'] each run so the
+# worker's state is readable from the Supabase dashboard (logs are unreachable).
+DIAG = {"events": []}
+def diag(msg):
+    DIAG["events"].append(f"{dt.datetime.now(dt.timezone.utc).strftime('%H:%M:%S')} {msg}")
+    print("[diag]", msg, flush=True)
+
 SB = {
     "apikey": SERVICE_KEY,
     "Authorization": f"Bearer {SERVICE_KEY}",
@@ -264,19 +271,20 @@ def gemini_extract(entry):
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
         try:
             r = requests.post(url, json=payload, timeout=60)
-            if r.status_code == 404:
-                last_err = f"{model}: 404"
-                continue
-            r.raise_for_status()
+            if r.status_code != 200:
+                last_err = f"{model}: HTTP {r.status_code} {r.text[:160]}"
+                if r.status_code == 404:
+                    continue          # model name not available — try next
+                break                 # auth/quota/other — same for all models, stop
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
             parsed = json.loads(text)
-            log(f"gemini ok ({model}): {len(parsed.get('tasks', []))} task(s)")
+            diag(f"gemini ok ({model}): {len(parsed.get('tasks', []))} task(s)")
             return parsed.get("tasks", [])
         except Exception as e:
-            last_err = f"{model}: {e}"
+            last_err = f"{model}: {type(e).__name__} {e}"
             continue
-    log("gemini failed:", last_err)
+    diag(f"gemini FAIL {last_err}")
     return None  # None = couldn't process (don't mark entry done)
 
 def parse_deadline(s):
@@ -316,12 +324,15 @@ def build_schedule(kind, deadline):
 
 def process_entries():
     entries = sb_get(f"entries?processed_at=is.null&select=*&order=created_at.asc&limit={MAX_ENTRIES_PER_RUN}")
-    log(f"{len(entries)} unprocessed entr{'y' if len(entries)==1 else 'ies'}")
+    diag(f"entries unprocessed: {len(entries)}")
+    created = 0
     for e in entries:
         tasks = gemini_extract(e)
         if tasks is None:
             continue  # LLM error — leave unprocessed, retry next run
+        diag(f"entry {str(e.get('id'))[:8]} ({e.get('type')}) -> {len(tasks)} task(s)")
         for t in tasks:
+            created += 1
             kind = t.get("kind", "smalltask")
             deadline = parse_deadline(t.get("deadline", ""))
             if kind == "deadline" and not deadline:
@@ -341,6 +352,7 @@ def process_entries():
             })
             log(f"  + task [{kind}] {t.get('title')}")
         sb_patch(f"entries?id=eq.{e['id']}", {"processed_at": iso(now_utc())})
+    diag(f"tasks created this run: {created}")
 
 # --- 3) Send due reminders --------------------------------------------------
 
@@ -349,11 +361,11 @@ KIND_LABEL = {"deadline": "📌 Задача со сроком", "smalltask": "�
 
 def send_due_reminders(chat_id):
     if not chat_id:
-        log("no chat_id yet — skip reminders (press /start in the bot)")
+        diag("no chat_id yet — skip reminders (press /start)")
         return
     due = sb_get(f"tasks?status=eq.open&next_reminder_at=lte.{iso(now_utc())}"
                  f"&next_reminder_at=not.is.null&select=*&order=next_reminder_at.asc")
-    log(f"{len(due)} reminder(s) due")
+    diag(f"reminders due: {len(due)} (chat_id set)")
     for task in due:
         head = KIND_LABEL.get(task["kind"], "🔔 Напоминание")
         lines = [f"{head}", f"<b>{task['title']}</b>"]
@@ -388,21 +400,28 @@ def advance_after_send(task):
 
 def main():
     log("run start", iso(now_utc()))
+    diag("run start")
     chat_id = None
     try:
         chat_id = poll_telegram()
     except Exception as e:
-        log("poll_telegram error:", e)
+        diag(f"poll_telegram ERROR {type(e).__name__} {e}")
+    diag(f"chat_id={'set' if chat_id else 'none'}")
     try:
         process_entries()
     except Exception as e:
-        log("process_entries error:", e)
+        diag(f"process_entries ERROR {type(e).__name__} {e}")
     try:
         if chat_id is None:
             chat_id = (settings_get("telegram", {}) or {}).get("chat_id")
         send_due_reminders(chat_id)
     except Exception as e:
-        log("send_due_reminders error:", e)
+        diag(f"send_due_reminders ERROR {type(e).__name__} {e}")
+    # Persist this run's diagnostics so it can be read from the DB dashboard.
+    try:
+        settings_set("worker_diag", {"at": iso(now_utc()), "events": DIAG["events"][-40:]})
+    except Exception as e:
+        log("diag persist failed:", e)
     log("run done")
 
 if __name__ == "__main__":
