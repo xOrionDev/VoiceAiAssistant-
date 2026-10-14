@@ -19,6 +19,7 @@ import re
 import json
 import datetime as dt
 from zoneinfo import ZoneInfo
+from urllib.parse import quote
 
 import requests
 
@@ -323,6 +324,7 @@ def build_schedule(kind, deadline):
     return local_at(now + dt.timedelta(days=7)), {}
 
 def process_entries():
+    chat_id = (settings_get("telegram", {}) or {}).get("chat_id")
     entries = sb_get(f"entries?processed_at=is.null&select=*&order=created_at.asc&limit={MAX_ENTRIES_PER_RUN}")
     diag(f"entries unprocessed: {len(entries)}")
     created = 0
@@ -331,6 +333,7 @@ def process_entries():
         if tasks is None:
             continue  # LLM error — leave unprocessed, retry next run
         diag(f"entry {str(e.get('id'))[:8]} ({e.get('type')}) -> {len(tasks)} task(s)")
+        made = []
         for t in tasks:
             created += 1
             kind = t.get("kind", "smalltask")
@@ -338,10 +341,11 @@ def process_entries():
             if kind == "deadline" and not deadline:
                 kind = "idea"  # claimed a deadline but gave none usable -> backlog
             nxt, rule = build_schedule(kind, deadline)
+            title = (t.get("title") or "").strip()[:200] or "Задача"
             sb_insert("tasks", {
                 "user_id": e.get("user_id"),
                 "source_entry_id": e.get("id"),
-                "title": (t.get("title") or "").strip()[:200] or "Задача",
+                "title": title,
                 "details": (t.get("details") or "").strip(),
                 "kind": kind,
                 "recipient": (t.get("recipient") or "").strip() or None,
@@ -350,9 +354,22 @@ def process_entries():
                 "next_reminder_at": iso(nxt) if nxt else None,
                 "reminder_rule": rule,
             })
-            log(f"  + task [{kind}] {t.get('title')}")
+            made.append((title, kind, nxt))
+            log(f"  + task [{kind}] {title}")
         sb_patch(f"entries?id=eq.{e['id']}", {"processed_at": iso(now_utc())})
+        notify_created(chat_id, made)
     diag(f"tasks created this run: {created}")
+
+def notify_created(chat_id, made):
+    """Instant Telegram confirmation that an entry became task(s)."""
+    if not chat_id or not made:
+        return
+    lines = ["🆕 <b>Из твоей заметки — новые задачи:</b>"]
+    for title, kind, nxt in made:
+        label = KIND_LABEL.get(kind, "•")
+        when = f" · напомню {nxt.astimezone(TZ).strftime('%d.%m %H:%M')}" if nxt else ""
+        lines.append(f"{label}: {title}{when}")
+    tg_send(chat_id, "\n".join(lines))
 
 # --- 3) Send due reminders --------------------------------------------------
 
@@ -363,7 +380,10 @@ def send_due_reminders(chat_id):
     if not chat_id:
         diag("no chat_id yet — skip reminders (press /start)")
         return
-    due = sb_get(f"tasks?status=eq.open&next_reminder_at=lte.{iso(now_utc())}"
+    # NB: the '+' in an ISO timestamp becomes a space in a URL query → must be
+    # percent-encoded, or PostgREST rejects the filter with 400.
+    now_q = quote(iso(now_utc()), safe="")
+    due = sb_get(f"tasks?status=eq.open&next_reminder_at=lte.{now_q}"
                  f"&next_reminder_at=not.is.null&select=*&order=next_reminder_at.asc")
     diag(f"reminders due: {len(due)} (chat_id set)")
     for task in due:
