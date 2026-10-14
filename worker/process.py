@@ -268,25 +268,56 @@ def gemini_extract(entry):
     }
 
     last_err = None
-    for model in GEMINI_MODELS:
+    for model in gemini_candidates():
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_KEY}"
-        try:
-            r = requests.post(url, json=payload, timeout=60)
-            if r.status_code != 200:
-                last_err = f"{model}: HTTP {r.status_code} {r.text[:160]}"
-                if r.status_code == 404:
-                    continue          # model name not available — try next
-                break                 # auth/quota/other — same for all models, stop
-            data = r.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            parsed = json.loads(text)
-            diag(f"gemini ok ({model}): {len(parsed.get('tasks', []))} task(s)")
-            return parsed.get("tasks", [])
-        except Exception as e:
-            last_err = f"{model}: {type(e).__name__} {e}"
-            continue
+        for attempt in range(3):  # retry transient throttling/5xx
+            try:
+                r = requests.post(url, json=payload, timeout=60)
+                if r.status_code == 200:
+                    text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    parsed = json.loads(text)
+                    diag(f"gemini ok ({model}): {len(parsed.get('tasks', []))} task(s)")
+                    return parsed.get("tasks", [])
+                last_err = f"{model}: HTTP {r.status_code} {r.text[:120]}"
+                if r.status_code in (429, 500, 503):
+                    import time; time.sleep(2 * (attempt + 1))
+                    continue          # transient — retry same model
+                break                 # 404/400/403 — try next model
+            except Exception as e:
+                last_err = f"{model}: {type(e).__name__} {e}"
+                import time; time.sleep(1)
     diag(f"gemini FAIL {last_err}")
     return None  # None = couldn't process (don't mark entry done)
+
+
+# Resolve a concrete, generateContent-capable model from the live API, so we
+# never rely on name guesses or '-latest' aliases that may 404 intermittently.
+_RESOLVED = None
+def gemini_candidates():
+    global _RESOLVED
+    if _RESOLVED is not None:
+        return _RESOLVED
+    prefs = ["gemini-2.0-flash-001", "gemini-2.0-flash", "gemini-flash-latest",
+             "gemini-2.5-flash", "gemini-1.5-flash-002", "gemini-1.5-flash"]
+    try:
+        r = requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_KEY}&pageSize=200",
+            timeout=30)
+        if r.status_code == 200:
+            avail = [m["name"].split("/")[-1] for m in r.json().get("models", [])
+                     if "generateContent" in m.get("supportedGenerationMethods", [])]
+            diag("models available: " + (", ".join(avail[:15]) or "none"))
+            ordered = [p for p in prefs if p in avail]
+            flashes = [n for n in avail if "flash" in n and n not in ordered]
+            others = [n for n in avail if n not in ordered and n not in flashes]
+            _RESOLVED = ordered + flashes + others
+        else:
+            diag(f"ListModels HTTP {r.status_code} {r.text[:100]}")
+            _RESOLVED = prefs
+    except Exception as e:
+        diag(f"ListModels ERR {type(e).__name__} {e}")
+        _RESOLVED = prefs
+    return _RESOLVED or prefs
 
 def parse_deadline(s):
     if not s:
